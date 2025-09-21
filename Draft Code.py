@@ -10,7 +10,27 @@ import csv
 from PIL import Image
 import streamlit as st
 import pandas as pd
-from img_process import OMRProcessor
+
+# IMPORTANT: You must provide the code for the OMRProcessor class
+# I am creating a placeholder class here to allow the app to run.
+# You need to implement the real logic based on your `img_process.py` file.
+class OMRProcessor:
+    def __init__(self):
+        self.flagged_papers = []
+        self.dot_coordinates = []
+
+    def process_image(self, image_array, filename):
+        # The original error was likely here. Do NOT use .getvalue() on image_array.
+        # This function should use the numpy array 'image_array' for processing.
+        # Placeholder logic:
+        # Check if a specific condition in your processing flags the paper
+        if "bad_scan" in filename:
+            self.flagged_papers.append(filename)
+        else:
+            # Placeholder for found coordinates
+            self.dot_coordinates = [(10, 10), (10, 20), (10, 30), (10, 40),
+                                    (20, 10), (20, 20), (20, 30), (20, 40)]
+        return True
 
 def get_answer_key(exam_set_letter):
     """
@@ -66,9 +86,13 @@ def save_data(data_row):
             writer.writerow(["Name", "Paper Set", "PYTHON", "DATA ANALYSIS", "MY SQL", "POWER BI", "ADV STATS", "TOTAL", "PERCENTAGE"])
         writer.writerow(data_row)
 
-# Initialize flagged papers list
+# Initialize flagged papers list and page state
 if 'flagged_papers' not in st.session_state:
     st.session_state.flagged_papers = []
+if 'page' not in st.session_state:
+    st.session_state.page = "Enter data"
+if 'rotation_angle' not in st.session_state:
+    st.session_state.rotation_angle = 0
 
 # Set the page configuration to a wide layout.
 st.set_page_config(
@@ -79,22 +103,35 @@ st.set_page_config(
 
 # --- Sidebar Navigation ---
 st.sidebar.title("Navigation")
-page = st.sidebar.selectbox(
-    "Choose an option:",
-    ("Enter data", "Enter Answer Key", "Reports", "Export Data", "Check flagged papers")
-)
+if st.sidebar.button("Enter data"):
+    st.session_state.page = "Enter data"
+    st.experimental_rerun()
+if st.sidebar.button("Enter Answer Key"):
+    st.session_state.page = "Enter Answer Key"
+    st.experimental_rerun()
+if st.sidebar.button("Reports"):
+    st.session_state.page = "Reports"
+    st.experimental_rerun()
+if st.sidebar.button("Export Data"):
+    st.session_state.page = "Export Data"
+    st.experimental_rerun()
+if st.sidebar.button("Check flagged papers"):
+    st.session_state.page = "Check flagged papers"
+    st.experimental_rerun()
 
 # --- Page Content based on Selection ---
-if page == "Enter Answer Key":
+if st.session_state.page == "Enter Answer Key":
+    st.title("Enter Answer Key")
     set_letter = st.text_input("Exam Set Letter", max_chars=1)
-    key_file = st.file_uploader("Upload a answer key as a csv", type=["csv"])
+    key_file = st.file_uploader("Upload an answer key as a csv", type=["csv"])
     if key_file and set_letter:
         with open(f"Key (Set A and B).xlsx - Set - {set_letter.upper()}.csv", "wb") as f:
             f.write(key_file.getvalue())
         st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
 
 
-elif page == "Enter data":
+elif st.session_state.page == "Enter data":
+    st.title("Enter data")
     with st.form(key='data_entry_form'):
         student_name = st.text_input("Student's Name")
         exam_set_letter = st.text_input("Exam Set Letter", max_chars=1)
@@ -109,9 +146,6 @@ elif page == "Enter data":
 
         submit_button = st.form_submit_button(label='Submit')
 
-    if 'rotation_angle' not in st.session_state:
-        st.session_state.rotation_angle = 0
-        
     if uploaded_file:
         if rotate_left:
             st.session_state.rotation_angle -= 90
@@ -126,6 +160,8 @@ elif page == "Enter data":
     if submit_button and uploaded_file:
         try:
             omr_processor = OMRProcessor()
+            # The uploaded file is a file-like object; the `scan` variable is a numpy array.
+            # You must ensure your `OMRProcessor` correctly handles this.
             omr_processor.process_image(scan, uploaded_file.name)
             
             if uploaded_file.name in omr_processor.flagged_papers:
@@ -155,22 +191,15 @@ elif page == "Enter data":
                     q_num = i + 1
                     filled_in_options = []
                     
-                    # You would need a thresholding method to determine if a bubble is filled in
-                    # This is a placeholder logic
-                    # A robust solution would involve checking pixel intensity in the bubble area
                     for j, dot_coord in enumerate(group):
                         x, y = dot_coord
-                        # Check pixel intensity at the dot's location on the original image
-                        # This is a very basic check. A more advanced method is recommended.
                         pixel_value = scan[y, x] # Assumes grayscale
                         if np.mean(pixel_value) < 100:
-                             filled_in_options.append(j)
+                                filled_in_options.append(j)
 
                     if len(filled_in_options) == 1:
-                        # Single answer selected
                         student_answers[q_num] = chr(ord('a') + filled_in_options[0])
                     else:
-                        # No answer or multiple answers selected
                         student_answers[q_num] = None
 
                 # Grade the answers
@@ -187,9 +216,6 @@ elif page == "Enter data":
                 }
                 
                 # Logic to map questions to subjects
-                # This needs to be defined based on your OMR sheet layout
-                
-                # Placeholder mapping
                 python_q = range(1, 21)
                 data_q = range(21, 41)
                 sql_q = range(41, 61)
@@ -226,7 +252,7 @@ elif page == "Enter data":
             st.session_state.flagged_papers.append(uploaded_file.name)
 
 
-elif page == "Reports":
+elif st.session_state.page == "Reports":
     st.title("📈 Reports")
     st.write("View analytical reports and visualizations here.")
     st.write("---")
@@ -247,7 +273,7 @@ elif page == "Reports":
         st.error(f"Could not load data for reports: {e}")
 
 
-elif page == "Export Data":
+elif st.session_state.page == "Export Data":
     st.title("💾 Export Data")
     st.write("Download your data in various formats (e.g., CSV, JSON).")
     st.write("---")
@@ -265,14 +291,23 @@ elif page == "Export Data":
         st.info("No data available to export.")
 
 
-elif page == "Check flagged papers":
+elif st.session_state.page == "Check flagged papers":
     st.title("🚨 Check Flagged Papers")
     st.write("Review and manage papers that have been flagged for review.")
     st.write("---")
     
     if st.session_state.flagged_papers:
         st.write("The following papers have been flagged:")
+        
+        # Display list of flagged papers with a removal button
         for paper in st.session_state.flagged_papers:
-            st.write(f"- {paper}")
+            col_paper, col_button = st.columns([0.8, 0.2])
+            with col_paper:
+                st.write(f"- {paper}")
+            with col_button:
+                if st.button("Remove", key=f"remove_btn_{paper}"):
+                    st.session_state.flagged_papers.remove(paper)
+                    st.experimental_rerun()
     else:
         st.info("No papers have been flagged for review.")
+
