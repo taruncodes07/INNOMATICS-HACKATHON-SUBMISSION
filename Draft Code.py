@@ -194,7 +194,9 @@ def get_answer_key(exam_set_letter):
     """
     try:
         file_path = f"Key (Set A and B).xlsx - Set - {exam_set_letter.upper()}.csv"
-        with open(file_path, 'r') as f:
+        # The `open` function on a local file path returns a text stream, not a file-like object
+        # The logic below assumes the file is already uploaded to the server's filesystem
+        with open(file_path, 'r', newline='') as f:
             reader = csv.reader(f)
             # Skip header and blank rows
             rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
@@ -281,9 +283,43 @@ if st.session_state.page == "Enter Answer Key":
     set_letter = st.text_input("Exam Set Letter", max_chars=1)
     key_file = st.file_uploader("Upload an answer key as a csv", type=["csv"])
     if key_file and set_letter:
-        with open(f"Key (Set A and B).xlsx - Set - {set_letter.upper()}.csv", "wb") as f:
-            f.write(key_file.getvalue())
-        st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
+        # Pass the uploaded file object directly to the function
+        answer_key = get_answer_key_from_upload(key_file, set_letter)
+        if answer_key:
+            st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
+            # You might want to save the key to a more persistent location here,
+            # but for this example, we'll assume it's processed in memory.
+
+def get_answer_key_from_upload(uploaded_file, exam_set_letter):
+    """
+    Loads the answer key from an uploaded CSV file.
+    """
+    try:
+        # Read the uploaded file as a string
+        string_data = uploaded_file.getvalue().decode("utf-8")
+        reader = csv.reader(string_data.splitlines())
+        
+        # Skip header and blank rows
+        rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
+        
+        answer_key = {}
+        for row in rows:
+            for col in row:
+                col = col.strip()
+                if ' - ' in col:
+                    parts = col.split(' - ')
+                    question_number = int(parts[0])
+                    answer_letter = parts[1].strip().lower()
+                    answer_key[question_number] = answer_letter
+                elif '. ' in col:
+                     parts = col.split('. ')
+                     question_number = int(parts[0])
+                     answer_letter = parts[1].strip().lower()
+                     answer_key[question_number] = answer_letter
+        return answer_key
+    except Exception as e:
+        st.error(f"Error processing answer key: {e}")
+        return None
 
 
 elif st.session_state.page == "Enter data":
@@ -466,4 +502,3 @@ elif st.session_state.page == "Check flagged papers":
                     st.rerun()
     else:
         st.info("No papers have been flagged for review.")
-
