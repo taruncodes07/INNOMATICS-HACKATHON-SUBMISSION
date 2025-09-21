@@ -65,8 +65,8 @@ class OMRProcessor:
         return image
 
     def process_image(self, image_array, file_name):
-        # CORRECTED: This function now directly accepts a NumPy array `image_array`
-        # and no longer expects a file object with a .getvalue() method.
+        # CORRECTED: The function now directly uses the NumPy array `image_array`.
+        # No file I/O or .getvalue() calls are needed.
         if len(image_array.shape) == 3:
             # Convert to grayscale for processing
             gray_image = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
@@ -190,34 +190,55 @@ class OMRProcessor:
 
 def get_answer_key(uploaded_file):
     """
-    Loads the answer key from an uploaded CSV file.
+    Loads the answer key from an uploaded CSV or XLSX file.
     """
     if uploaded_file is None:
         return None
         
     try:
-        # Read the uploaded file as a string
-        string_data = uploaded_file.getvalue().decode("utf-8")
-        reader = csv.reader(string_data.splitlines())
+        if uploaded_file.name.endswith('.csv'):
+            # Read the uploaded file as a string
+            string_data = uploaded_file.getvalue().decode("utf-8")
+            reader = csv.reader(string_data.splitlines())
+            
+            # Skip header and blank rows
+            rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
+            
+            answer_key = {}
+            for row in rows:
+                for col in row:
+                    col = col.strip()
+                    if ' - ' in col:
+                        parts = col.split(' - ')
+                        question_number = int(parts[0])
+                        answer_letter = parts[1].strip().lower()
+                        answer_key[question_number] = answer_letter
+                    elif '. ' in col:
+                         parts = col.split('. ')
+                         question_number = int(parts[0])
+                         answer_letter = parts[1].strip().lower()
+                         answer_key[question_number] = answer_letter
+            return answer_key
         
-        # Skip header and blank rows
-        rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
-        
-        answer_key = {}
-        for row in rows:
-            for col in row:
-                col = col.strip()
-                if ' - ' in col:
-                    parts = col.split(' - ')
-                    question_number = int(parts[0])
-                    answer_letter = parts[1].strip().lower()
-                    answer_key[question_number] = answer_letter
-                elif '. ' in col:
-                     parts = col.split('. ')
-                     question_number = int(parts[0])
-                     answer_letter = parts[1].strip().lower()
-                     answer_key[question_number] = answer_letter
-        return answer_key
+        elif uploaded_file.name.endswith('.xlsx'):
+            # Process XLSX file
+            df_key = pd.read_excel(uploaded_file)
+            answer_key = {}
+            for _, row in df_key.iterrows():
+                for col in df_key.columns:
+                    value = str(row[col]).strip()
+                    if ' - ' in value:
+                        parts = value.split(' - ')
+                        question_number = int(parts[0])
+                        answer_letter = parts[1].strip().lower()
+                        answer_key[question_number] = answer_letter
+                    elif '. ' in value:
+                        parts = value.split('. ')
+                        question_number = int(parts[0])
+                        answer_letter = parts[1].strip().lower()
+                        answer_key[question_number] = answer_letter
+            return answer_key
+            
     except Exception as e:
         st.error(f"Error processing answer key: {e}")
         return None
@@ -292,52 +313,10 @@ if st.session_state.page == "Enter Answer Key":
     
     if st.button("Save Answer Key"):
         if key_file and set_letter:
-            try:
-                if key_file.name.endswith('.csv'):
-                    # Process CSV file
-                    string_data = key_file.getvalue().decode("utf-8")
-                    reader = csv.reader(string_data.splitlines())
-                    
-                    rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
-                    
-                    answer_key = {}
-                    for row in rows:
-                        for col in row:
-                            col = col.strip()
-                            if ' - ' in col:
-                                parts = col.split(' - ')
-                                question_number = int(parts[0])
-                                answer_letter = parts[1].strip().lower()
-                                answer_key[question_number] = answer_letter
-                            elif '. ' in col:
-                                parts = col.split('. ')
-                                question_number = int(parts[0])
-                                answer_letter = parts[1].strip().lower()
-                                answer_key[question_number] = answer_letter
-                
-                elif key_file.name.endswith('.xlsx'):
-                    # Process XLSX file
-                    df_key = pd.read_excel(key_file)
-                    answer_key = {}
-                    for _, row in df_key.iterrows():
-                        for col in df_key.columns:
-                            value = str(row[col]).strip()
-                            if ' - ' in value:
-                                parts = value.split(' - ')
-                                question_number = int(parts[0])
-                                answer_letter = parts[1].strip().lower()
-                                answer_key[question_number] = answer_letter
-                            elif '. ' in value:
-                                parts = value.split('. ')
-                                question_number = int(parts[0])
-                                answer_letter = parts[1].strip().lower()
-                                answer_key[question_number] = answer_letter
-                
-                # Store the key in session state
+            answer_key = get_answer_key(key_file)
+            if answer_key:
                 st.session_state.answer_keys[set_letter.upper()] = answer_key
                 st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
-            except Exception as e:
-                st.error(f"Error processing answer key: {e}")
         else:
             st.warning("Please provide both a set letter and an answer key file.")
 
