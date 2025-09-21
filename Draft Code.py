@@ -2,15 +2,187 @@ import cv2
 import numpy as np
 import os
 from sklearn.cluster import DBSCAN
-import imutils
-import math
-import itertools
-from io import BytesIO
-import csv
-from PIL import Image
 import streamlit as st
 import pandas as pd
-from img_process import OMRProcessor
+from PIL import Image
+from io import BytesIO
+import itertools
+import csv
+import imutils
+import math
+
+class OMRProcessor:
+    def __init__(self, darkness_factor=0.8):
+        self.flagged_papers = []
+        self.darkness_factor = darkness_factor
+
+    def resize_for_display(self, img, height):
+        h, w = img.shape[:2]
+        if h == 0: return img
+        scale = height / h
+        return cv2.resize(img, (int(w * scale), height))
+
+    def four_point_transform(self, image, pts):
+        rect = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
+        (tl, tr, br, bl) = rect
+
+        widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+        maxWidth = max(int(widthA), int(widthB))
+        heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+        heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+        maxHeight = max(int(heightA), int(heightB))
+        
+        margin = 100
+        dst = np.array([
+            [margin, margin],
+            [maxWidth - 1 - margin, margin],
+            [maxWidth - 1 - margin, maxHeight - 1 - margin],
+            [margin, maxHeight - 1 - margin]], dtype="float32")
+            
+        M = cv2.getPerspectiveTransform(rect, dst)
+        warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+        
+        return warped, M, dst
+
+    def group_and_filter_coordinates(self, coords, tolerance=5, min_group_size=5):
+        if not coords:
+            return []
+        coords.sort()
+        groups = [[coords[0]]]
+        for coord in coords[1:]:
+            if abs(coord - groups[-1][-1]) <= tolerance:
+                groups[-1].append(coord)
+            else:
+                groups.append([coord])
+        filtered_groups = [group for group in groups if len(group) >= min_group_size]
+        return [int(np.mean(group)) for group in filtered_groups]
+
+    def preprocess_image(self, image):
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        clahe_image = clahe.apply(gray_image)
+        blurred_image = cv2.GaussianBlur(clahe_image, (5, 5), 0)
+        return blurred_image
+
+    def process_image(self, image, filename):
+        preprocessed_image = self.preprocess_image(image)
+        bw_image = cv2.adaptiveThreshold(preprocessed_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5)
+        contours, _ = cv2.findContours(bw_image.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        bubble_contours = []
+        for c in contours:
+            area = cv2.contourArea(c)
+            (x, y, w, h) = cv2.boundingRect(c)
+            if h == 0: continue
+            aspect_ratio = w / float(h)
+            perimeter = cv2.arcLength(c, True)
+            if perimeter == 0: continue
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
+            if 250 < area < 1500 and 0.8 < aspect_ratio < 1.2 and circularity > 0.8:
+                bubble_contours.append(c)
+
+        if len(bubble_contours) < 385:
+            self.flagged_papers.append(filename)
+            return None, None
+
+        all_centers = []
+        if bubble_contours:
+            centers = []
+            for c in bubble_contours:
+                M = cv2.moments(c)
+                if M["m00"] != 0:
+                    cX = int(M["m10"] / M["m00"])
+                    cY = int(M["m01"] / M["m00"])
+                    centers.append((cX, cY))
+            if centers:
+                all_centers = np.array(centers)
+                db = DBSCAN(eps=50, min_samples=4).fit(all_centers)
+                labels = db.labels_
+
+                if -1 in labels:
+                    non_stray_centers = all_centers[labels != -1]
+                else:
+                    non_stray_centers = all_centers
+
+                if len(non_stray_centers) > 0:
+                    x_coords = [p[0] for p in non_stray_centers]
+                    y_coords = [p[1] for p in non_stray_centers]
+                    min_x, max_x = np.min(x_coords), np.max(x_coords)
+                    min_y, max_y = np.min(y_coords), np.max(y_coords)
+                    corners = [
+                        min(non_stray_centers, key=lambda p: (p[0] - min_x)**2 + (p[1] - min_y)**2),
+                        min(non_stray_centers, key=lambda p: (p[0] - max_x)**2 + (p[1] - min_y)**2),
+                        min(non_stray_centers, key=lambda p: (p[0] - min_x)**2 + (p[1] - max_y)**2),
+                        min(non_stray_centers, key=lambda p: (p[0] - max_x)**2 + (p[1] - max_y)**2)
+                    ]
+                    
+                    corners_sorted = sorted(corners, key=lambda p: (p[0], p[1]))
+                    top_points = sorted(corners_sorted[:2], key=lambda p: p[1])
+                    bottom_points = sorted(corners_sorted[2:], key=lambda p: p[1], reverse=True)
+                    final_corners = [top_points[0], top_points[1], bottom_points[0], bottom_points[1]]
+                else:
+                    self.flagged_papers.append(filename)
+                    return None, None
+            else:
+                self.flagged_papers.append(filename)
+                return None, None
+        else:
+            self.flagged_papers.append(filename)
+            return None, None
+
+        preprocessed_warped_image, M, _ = self.four_point_transform(preprocessed_image, np.float32(final_corners))
+        bubble_points = np.array(all_centers, dtype='float32').reshape(-1, 1, 2)
+        warped_points = cv2.perspectiveTransform(bubble_points, M).reshape(-1, 2)
+        
+        warped_x_coords = [p[0] for p in warped_points]
+        warped_y_coords = [p[1] for p in warped_points]
+        unique_x = self.group_and_filter_coordinates(warped_x_coords, tolerance=5, min_group_size=5)
+        unique_y = self.group_and_filter_coordinates(warped_y_coords, tolerance=5, min_group_size=1)
+        
+        filled_bubbles_labels = {}
+        for row_idx, y_coord in enumerate(unique_y):
+            for col_idx, x_coord in enumerate(unique_x):
+                warped_x = int(x_coord)
+                warped_y = int(y_coord)
+
+                if 0 <= warped_x < preprocessed_warped_image.shape[1] and 0 <= warped_y < preprocessed_warped_image.shape[0]:
+                    bubble_roi_size = 5
+                    background_roi_size = 15
+
+                    x_start_bubble = max(0, int(warped_x - bubble_roi_size))
+                    y_start_bubble = max(0, int(warped_y - bubble_roi_size))
+                    x_end_bubble = min(preprocessed_warped_image.shape[1], int(warped_x + bubble_roi_size))
+                    y_end_bubble = min(preprocessed_warped_image.shape[0], int(warped_y + bubble_roi_size))
+
+                    x_start_bg = max(0, int(warped_x - background_roi_size))
+                    y_start_bg = max(0, int(warped_y - background_roi_size))
+                    x_end_bg = min(preprocessed_warped_image.shape[1], int(warped_x + background_roi_size))
+                    y_end_bg = min(preprocessed_warped_image.shape[0], int(warped_y + background_roi_size))
+                        
+                    if (x_end_bubble > x_start_bubble and y_end_bubble > y_start_bubble and
+                        x_end_bg > x_start_bg and y_end_bg > y_start_bg):
+                        
+                        bubble_roi = preprocessed_warped_image[y_start_bubble:y_end_bubble, x_start_bubble:x_end_bubble]
+                        bg_roi = preprocessed_warped_image[y_start_bg:y_end_bg, x_start_bg:x_end_bg]
+                        
+                        avg_intensity_bubble = np.mean(bubble_roi)
+                        avg_intensity_bg = np.mean(bg_roi)
+                        
+                        if avg_intensity_bubble < avg_intensity_bg * self.darkness_factor:
+                            q_group = col_idx // 4
+                            q_num = start_numbers[q_group] + row_idx
+                            option_letter = chr(ord('A') + (col_idx % 4))
+                            
+                            filled_bubbles_labels.setdefault(q_num, []).append(option_letter)
+
+        return filled_bubbles_labels, self.flagged_papers
 
 def get_answer_key(uploaded_file):
     """
@@ -21,11 +193,8 @@ def get_answer_key(uploaded_file):
         
     try:
         if uploaded_file.name.endswith('.csv'):
-            # Read the uploaded file as a string
             string_data = uploaded_file.getvalue().decode("utf-8")
             reader = csv.reader(string_data.splitlines())
-            
-            # Skip header and blank rows
             rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
             
             answer_key = {}
@@ -38,14 +207,13 @@ def get_answer_key(uploaded_file):
                         answer_letter = parts[1].strip().lower()
                         answer_key[question_number] = answer_letter
                     elif '. ' in col:
-                         parts = col.split('. ')
-                         question_number = int(parts[0])
-                         answer_letter = parts[1].strip().lower()
-                         answer_key[question_number] = answer_letter
+                        parts = col.split('. ')
+                        question_number = int(parts[0])
+                        answer_letter = parts[1].strip().lower()
+                        answer_key[question_number] = answer_letter
             return answer_key
         
         elif uploaded_file.name.endswith('.xlsx'):
-            # Process XLSX file
             df_key = pd.read_excel(uploaded_file)
             answer_key = {}
             for _, row in df_key.iterrows():
@@ -67,23 +235,7 @@ def get_answer_key(uploaded_file):
         st.error(f"Error processing answer key: {e}")
         return None
 
-def find_closest_dot(point, dots):
-    """
-    Finds the closest dot to a given point.
-    """
-    min_dist = float('inf')
-    closest_dot = None
-    for dot in dots:
-        dist = np.sqrt((point[0] - dot[0])**2 + (point[1] - dot[1])**2)
-        if dist < min_dist:
-            min_dist = dist
-            closest_dot = dot
-    return closest_dot
-
 def save_data(data_row):
-    """
-    Appends the student's data to the DATA.CSV file.
-    """
     file_exists = os.path.isfile('DATA.CSV')
     with open('DATA.CSV', 'a', newline='') as f:
         writer = csv.writer(f, delimiter='\t')
@@ -91,7 +243,6 @@ def save_data(data_row):
             writer.writerow(["Name", "Paper Set", "PYTHON", "DATA ANALYSIS", "MY SQL", "POWER BI", "ADV STATS", "TOTAL", "PERCENTAGE"])
         writer.writerow(data_row)
 
-# Initialize flagged papers list and page state
 if 'flagged_papers' not in st.session_state:
     st.session_state.flagged_papers = []
 if 'page' not in st.session_state:
@@ -103,15 +254,12 @@ if 'answer_keys' not in st.session_state:
 if 'data_df' not in st.session_state:
     st.session_state.data_df = pd.DataFrame(columns=["Name", "Paper Set", "PYTHON", "DATA ANALYSIS", "MY SQL", "POWER BI", "ADV STATS", "TOTAL", "PERCENTAGE"])
 
-
-# Set the page configuration to a wide layout.
 st.set_page_config(
     page_title="Data Management App",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# --- Sidebar Navigation ---
 st.sidebar.title("Navigation")
 if st.sidebar.button("Enter data"):
     st.session_state.page = "Enter data"
@@ -129,7 +277,6 @@ if st.sidebar.button("Check flagged papers"):
     st.session_state.page = "Check flagged papers"
     st.rerun()
 
-# --- Page Content based on Selection ---
 if st.session_state.page == "Enter Answer Key":
     st.title("Enter Answer Key")
     set_letter = st.text_input("Exam Set Letter", max_chars=1)
@@ -144,7 +291,6 @@ if st.session_state.page == "Enter Answer Key":
         else:
             st.warning("Please provide both a set letter and an answer key file.")
 
-
 elif st.session_state.page == "Enter data":
     st.title("Enter data")
     with st.form(key='data_entry_form'):
@@ -158,7 +304,6 @@ elif st.session_state.page == "Enter data":
             rotate_left = st.form_submit_button(label='Rotate Left')
         with col2:
             rotate_right = st.form_submit_button(label='Rotate Right')
-
         submit_button = st.form_submit_button(label='Submit')
 
     if uploaded_file:
@@ -181,58 +326,33 @@ elif st.session_state.page == "Enter data":
                 st.rerun()
                 
             omr_processor = OMRProcessor()
-            omr_processor.process_image(scan, uploaded_file.name)
+            filled_bubbles_labels, flagged_papers_list = omr_processor.process_image(scan, uploaded_file.name)
             
-            if uploaded_file.name in omr_processor.flagged_papers:
+            if uploaded_file.name in flagged_papers_list:
                 st.warning("This paper has been flagged for manual review.")
                 st.session_state.flagged_papers.append(uploaded_file.name)
             else:
                 st.success("Paper processed successfully!")
-                
-                # Get the answer key from session state
                 answer_key = st.session_state.answer_keys[exam_set_letter.upper()]
                 
-                # Compartmentalize coordinates
-                compartmentalized_coords = []
-                coords = omr_processor.dot_coordinates
-                
-                # Sort the coordinates to group by question
-                coords.sort(key=lambda p: (p[1], p[0]))
-
-                # Divide into groups of 4 (for A, B, C, D)
-                for i in range(0, len(coords), 4):
-                    compartmentalized_coords.append(coords[i:i+4])
-
                 student_answers = {}
-                for i, group in enumerate(compartmentalized_coords):
-                    q_num = i + 1
-                    filled_in_options = []
-                    
-                    for j, dot_coord in enumerate(group):
-                        x, y = dot_coord
-                        pixel_value = scan[y, x] # Assumes grayscale
-                        if np.mean(pixel_value) < 100:
-                                filled_in_options.append(j)
-
-                    if len(filled_in_options) == 1:
-                        student_answers[q_num] = chr(ord('a') + filled_in_options[0])
+                for q_num, options in filled_bubbles_labels.items():
+                    if len(options) == 1:
+                        student_answers[q_num] = options[0].lower()
                     else:
                         student_answers[q_num] = None
 
-                # Grade the answers
                 total_marks = 0
                 for q_num, correct_ans in answer_key.items():
                     student_ans = student_answers.get(q_num)
                     if student_ans is not None and student_ans == correct_ans:
                         total_marks += 1
                 
-                # Prepare data row for CSV
                 subject_marks = {
                     "PYTHON": 0, "DATA ANALYSIS": 0, "MY SQL": 0,
                     "POWER BI": 0, "ADV STATS": 0
                 }
                 
-                # Logic to map questions to subjects
                 python_q = range(1, 21)
                 data_q = range(21, 41)
                 sql_q = range(41, 61)
@@ -262,7 +382,6 @@ elif st.session_state.page == "Enter data":
                     "PERCENTAGE": f"{percentage:.2f}%"
                 }
 
-                # Append data to the DataFrame in session state
                 st.session_state.data_df = pd.concat([st.session_state.data_df, pd.DataFrame([data_dict])], ignore_index=True)
                 
                 st.write("### Results")
@@ -274,7 +393,6 @@ elif st.session_state.page == "Enter data":
             st.error(f"An error occurred: {e}")
             st.warning("Paper flagged for manual review.")
             st.session_state.flagged_papers.append(uploaded_file.name)
-
 
 elif st.session_state.page == "Reports":
     st.title("📈 Reports")
@@ -292,14 +410,12 @@ elif st.session_state.page == "Reports":
     else:
         st.info("No data available yet. Please submit some papers first.")
 
-
 elif st.session_state.page == "Export Data":
     st.title("💾 Export Data")
     st.write("Download your data in various formats (e.g., CSV, JSON).")
     st.write("---")
     
     if not st.session_state.data_df.empty:
-        # Convert DataFrame to CSV string for download
         csv_data = st.session_state.data_df.to_csv(index=False)
         st.download_button(
             label="Download data as CSV",
@@ -310,7 +426,6 @@ elif st.session_state.page == "Export Data":
     else:
         st.info("No data available to export.")
 
-
 elif st.session_state.page == "Check flagged papers":
     st.title("🚨 Check Flagged Papers")
     st.write("Review and manage papers that have been flagged for review.")
@@ -319,7 +434,6 @@ elif st.session_state.page == "Check flagged papers":
     if st.session_state.flagged_papers:
         st.write("The following papers have been flagged:")
         
-        # Display list of flagged papers with a removal button
         for paper in st.session_state.flagged_papers:
             col_paper, col_button = st.columns([0.8, 0.2])
             with col_paper:
