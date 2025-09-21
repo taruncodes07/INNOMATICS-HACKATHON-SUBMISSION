@@ -288,31 +288,50 @@ if st.sidebar.button("Check flagged papers"):
 if st.session_state.page == "Enter Answer Key":
     st.title("Enter Answer Key")
     set_letter = st.text_input("Exam Set Letter", max_chars=1)
-    key_file = st.file_uploader("Upload an answer key as a csv", type=["csv"])
+    key_file = st.file_uploader("Upload an answer key as a csv", type=["csv", "xlsx"])
     
     if st.button("Save Answer Key"):
         if key_file and set_letter:
             try:
-                # Read the uploaded file as a string
-                string_data = key_file.getvalue().decode("utf-8")
-                reader = csv.reader(string_data.splitlines())
+                if key_file.name.endswith('.csv'):
+                    # Process CSV file
+                    string_data = key_file.getvalue().decode("utf-8")
+                    reader = csv.reader(string_data.splitlines())
+                    
+                    rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
+                    
+                    answer_key = {}
+                    for row in rows:
+                        for col in row:
+                            col = col.strip()
+                            if ' - ' in col:
+                                parts = col.split(' - ')
+                                question_number = int(parts[0])
+                                answer_letter = parts[1].strip().lower()
+                                answer_key[question_number] = answer_letter
+                            elif '. ' in col:
+                                parts = col.split('. ')
+                                question_number = int(parts[0])
+                                answer_letter = parts[1].strip().lower()
+                                answer_key[question_number] = answer_letter
                 
-                rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
-                
-                answer_key = {}
-                for row in rows:
-                    for col in row:
-                        col = col.strip()
-                        if ' - ' in col:
-                            parts = col.split(' - ')
-                            question_number = int(parts[0])
-                            answer_letter = parts[1].strip().lower()
-                            answer_key[question_number] = answer_letter
-                        elif '. ' in col:
-                            parts = col.split('. ')
-                            question_number = int(parts[0])
-                            answer_letter = parts[1].strip().lower()
-                            answer_key[question_number] = answer_letter
+                elif key_file.name.endswith('.xlsx'):
+                    # Process XLSX file
+                    df_key = pd.read_excel(key_file)
+                    answer_key = {}
+                    for _, row in df_key.iterrows():
+                        for col in df_key.columns:
+                            value = str(row[col]).strip()
+                            if ' - ' in value:
+                                parts = value.split(' - ')
+                                question_number = int(parts[0])
+                                answer_letter = parts[1].strip().lower()
+                                answer_key[question_number] = answer_letter
+                            elif '. ' in value:
+                                parts = value.split('. ')
+                                question_number = int(parts[0])
+                                answer_letter = parts[1].strip().lower()
+                                answer_key[question_number] = answer_letter
                 
                 # Store the key in session state
                 st.session_state.answer_keys[set_letter.upper()] = answer_key
