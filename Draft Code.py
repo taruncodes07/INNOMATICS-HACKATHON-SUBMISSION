@@ -276,20 +276,6 @@ if st.sidebar.button("Export Data"):
 if st.sidebar.button("Check flagged papers"):
     st.session_state.page = "Check flagged papers"
     st.rerun()
-
-# --- Page Content based on Selection ---
-if st.session_state.page == "Enter Answer Key":
-    st.title("Enter Answer Key")
-    set_letter = st.text_input("Exam Set Letter", max_chars=1)
-    key_file = st.file_uploader("Upload an answer key as a csv", type=["csv"])
-    if key_file and set_letter:
-        # Pass the uploaded file object directly to the function
-        answer_key = get_answer_key_from_upload(key_file, set_letter)
-        if answer_key:
-            st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
-            # You might want to save the key to a more persistent location here,
-            # but for this example, we'll assume it's processed in memory.
-
 def get_answer_key_from_upload(uploaded_file, exam_set_letter):
     """
     Loads the answer key from an uploaded CSV file.
@@ -320,6 +306,19 @@ def get_answer_key_from_upload(uploaded_file, exam_set_letter):
     except Exception as e:
         st.error(f"Error processing answer key: {e}")
         return None
+
+# --- Page Content based on Selection ---
+if st.session_state.page == "Enter Answer Key":
+    st.title("Enter Answer Key")
+    set_letter = st.text_input("Exam Set Letter", max_chars=1)
+    key_file = st.file_uploader("Upload an answer key as a csv", type=["csv"])
+    if key_file and set_letter:
+        # Pass the uploaded file object directly to the function
+        answer_key = get_answer_key_from_upload(key_file, set_letter)
+        if answer_key:
+            st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
+            # You might want to save the key to a more persistent location here,
+            # but for this example, we'll assume it's processed in memory.
 
 
 elif st.session_state.page == "Enter data":
@@ -502,3 +501,4 @@ elif st.session_state.page == "Check flagged papers":
                     st.rerun()
     else:
         st.info("No papers have been flagged for review.")
+
