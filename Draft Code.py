@@ -188,36 +188,38 @@ class OMRProcessor:
         writer.writerows(image.tolist())
         return csv_file
 
-def get_answer_key(exam_set_letter):
+def get_answer_key(uploaded_file):
     """
-    Loads the answer key from a CSV file based on the exam set letter.
+    Loads the answer key from an uploaded CSV file.
     """
+    if uploaded_file is None:
+        return None
+        
     try:
-        file_path = f"Key (Set A and B).xlsx - Set - {exam_set_letter.upper()}.csv"
-        # The `open` function on a local file path returns a text stream, not a file-like object
-        # The logic below assumes the file is already uploaded to the server's filesystem
-        with open(file_path, 'r', newline='') as f:
-            reader = csv.reader(f)
-            # Skip header and blank rows
-            rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
-            
-            answer_key = {}
-            for row in rows:
-                for col in row:
-                    col = col.strip()
-                    if ' - ' in col:
-                        parts = col.split(' - ')
-                        question_number = int(parts[0])
-                        answer_letter = parts[1].strip().lower()
-                        answer_key[question_number] = answer_letter
-                    elif '. ' in col:
-                         parts = col.split('. ')
-                         question_number = int(parts[0])
-                         answer_letter = parts[1].strip().lower()
-                         answer_key[question_number] = answer_letter
-            return answer_key
-    except FileNotFoundError:
-        st.error(f"Answer key for Set {exam_set_letter.upper()} not found.")
+        # Read the uploaded file as a string
+        string_data = uploaded_file.getvalue().decode("utf-8")
+        reader = csv.reader(string_data.splitlines())
+        
+        # Skip header and blank rows
+        rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
+        
+        answer_key = {}
+        for row in rows:
+            for col in row:
+                col = col.strip()
+                if ' - ' in col:
+                    parts = col.split(' - ')
+                    question_number = int(parts[0])
+                    answer_letter = parts[1].strip().lower()
+                    answer_key[question_number] = answer_letter
+                elif '. ' in col:
+                     parts = col.split('. ')
+                     question_number = int(parts[0])
+                     answer_letter = parts[1].strip().lower()
+                     answer_key[question_number] = answer_letter
+        return answer_key
+    except Exception as e:
+        st.error(f"Error processing answer key: {e}")
         return None
 
 def find_closest_dot(point, dots):
@@ -251,6 +253,11 @@ if 'page' not in st.session_state:
     st.session_state.page = "Enter data"
 if 'rotation_angle' not in st.session_state:
     st.session_state.rotation_angle = 0
+if 'answer_keys' not in st.session_state:
+    st.session_state.answer_keys = {}
+if 'data_df' not in st.session_state:
+    st.session_state.data_df = pd.DataFrame(columns=["Name", "Paper Set", "PYTHON", "DATA ANALYSIS", "MY SQL", "POWER BI", "ADV STATS", "TOTAL", "PERCENTAGE"])
+
 
 # Set the page configuration to a wide layout.
 st.set_page_config(
@@ -276,49 +283,44 @@ if st.sidebar.button("Export Data"):
 if st.sidebar.button("Check flagged papers"):
     st.session_state.page = "Check flagged papers"
     st.rerun()
-def get_answer_key_from_upload(uploaded_file, exam_set_letter):
-    """
-    Loads the answer key from an uploaded CSV file.
-    """
-    try:
-        # Read the uploaded file as a string
-        string_data = uploaded_file.getvalue().decode("utf-8")
-        reader = csv.reader(string_data.splitlines())
-        
-        # Skip header and blank rows
-        rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
-        
-        answer_key = {}
-        for row in rows:
-            for col in row:
-                col = col.strip()
-                if ' - ' in col:
-                    parts = col.split(' - ')
-                    question_number = int(parts[0])
-                    answer_letter = parts[1].strip().lower()
-                    answer_key[question_number] = answer_letter
-                elif '. ' in col:
-                     parts = col.split('. ')
-                     question_number = int(parts[0])
-                     answer_letter = parts[1].strip().lower()
-                     answer_key[question_number] = answer_letter
-        return answer_key
-    except Exception as e:
-        st.error(f"Error processing answer key: {e}")
-        return None
 
 # --- Page Content based on Selection ---
 if st.session_state.page == "Enter Answer Key":
     st.title("Enter Answer Key")
     set_letter = st.text_input("Exam Set Letter", max_chars=1)
     key_file = st.file_uploader("Upload an answer key as a csv", type=["csv"])
-    if key_file and set_letter:
-        # Pass the uploaded file object directly to the function
-        answer_key = get_answer_key_from_upload(key_file, set_letter)
-        if answer_key:
-            st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
-            # You might want to save the key to a more persistent location here,
-            # but for this example, we'll assume it's processed in memory.
+    
+    if st.button("Save Answer Key"):
+        if key_file and set_letter:
+            try:
+                # Read the uploaded file as a string
+                string_data = key_file.getvalue().decode("utf-8")
+                reader = csv.reader(string_data.splitlines())
+                
+                rows = [row for row in reader if row and 'Python' not in row and 'Pyt' not in row]
+                
+                answer_key = {}
+                for row in rows:
+                    for col in row:
+                        col = col.strip()
+                        if ' - ' in col:
+                            parts = col.split(' - ')
+                            question_number = int(parts[0])
+                            answer_letter = parts[1].strip().lower()
+                            answer_key[question_number] = answer_letter
+                        elif '. ' in col:
+                            parts = col.split('. ')
+                            question_number = int(parts[0])
+                            answer_letter = parts[1].strip().lower()
+                            answer_key[question_number] = answer_letter
+                
+                # Store the key in session state
+                st.session_state.answer_keys[set_letter.upper()] = answer_key
+                st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
+            except Exception as e:
+                st.error(f"Error processing answer key: {e}")
+        else:
+            st.warning("Please provide both a set letter and an answer key file.")
 
 
 elif st.session_state.page == "Enter data":
@@ -350,9 +352,13 @@ elif st.session_state.page == "Enter data":
 
     if submit_button and uploaded_file:
         try:
+            if exam_set_letter.upper() not in st.session_state.answer_keys:
+                st.error(f"Answer key for Set {exam_set_letter.upper()} not found. Please upload it first.")
+                st.warning("Paper flagged for manual review.")
+                st.session_state.flagged_papers.append(uploaded_file.name)
+                st.rerun()
+                
             omr_processor = OMRProcessor()
-            # The uploaded file is a file-like object; the `scan` variable is a numpy array.
-            # You must ensure your `OMRProcessor` correctly handles this.
             omr_processor.process_image(scan, uploaded_file.name)
             
             if uploaded_file.name in omr_processor.flagged_papers:
@@ -361,11 +367,9 @@ elif st.session_state.page == "Enter data":
             else:
                 st.success("Paper processed successfully!")
                 
-                # Get the answer key
-                answer_key = get_answer_key(exam_set_letter)
-                if not answer_key:
-                    pass
-
+                # Get the answer key from session state
+                answer_key = st.session_state.answer_keys[exam_set_letter.upper()]
+                
                 # Compartmentalize coordinates
                 compartmentalized_coords = []
                 coords = omr_processor.dot_coordinates
@@ -423,19 +427,26 @@ elif st.session_state.page == "Enter data":
                         elif q_num in stats_q: subject_marks["ADV STATS"] += 1
                 
                 percentage = (total_marks / len(answer_key)) * 100
-                data_row = [
-                    student_name, exam_set_letter.upper(),
-                    subject_marks["PYTHON"], subject_marks["DATA ANALYSIS"],
-                    subject_marks["MY SQL"], subject_marks["POWER BI"],
-                    subject_marks["ADV STATS"], total_marks, f"{percentage:.2f}%"
-                ]
                 
-                save_data(data_row)
+                data_dict = {
+                    "Name": student_name,
+                    "Paper Set": exam_set_letter.upper(),
+                    "PYTHON": subject_marks["PYTHON"],
+                    "DATA ANALYSIS": subject_marks["DATA ANALYSIS"],
+                    "MY SQL": subject_marks["MY SQL"],
+                    "POWER BI": subject_marks["POWER BI"],
+                    "ADV STATS": subject_marks["ADV STATS"],
+                    "TOTAL": total_marks,
+                    "PERCENTAGE": f"{percentage:.2f}%"
+                }
+
+                # Append data to the DataFrame in session state
+                st.session_state.data_df = pd.concat([st.session_state.data_df, pd.DataFrame([data_dict])], ignore_index=True)
                 
                 st.write("### Results")
                 st.write(f"**Total Marks:** {total_marks}/{len(answer_key)}")
                 st.write(f"**Percentage:** {percentage:.2f}%")
-                st.dataframe(pd.DataFrame([data_row], columns=["Name", "Paper Set", "PYTHON", "DATA ANALYSIS", "MY SQL", "POWER BI", "ADV STATS", "TOTAL", "PERCENTAGE"]))
+                st.dataframe(pd.DataFrame([data_dict], columns=st.session_state.data_df.columns))
                 
         except Exception as e:
             st.error(f"An error occurred: {e}")
@@ -448,20 +459,16 @@ elif st.session_state.page == "Reports":
     st.write("View analytical reports and visualizations here.")
     st.write("---")
 
-    try:
-        df = pd.read_csv("DATA.CSV", sep='\t')
-        st.dataframe(df)
+    if not st.session_state.data_df.empty:
+        st.dataframe(st.session_state.data_df)
         
         st.subheader("Subject-wise Performance")
         subject_cols = ["PYTHON", "DATA ANALYSIS", "MY SQL", "POWER BI", "ADV STATS"]
-        subject_df = df[subject_cols].mean().reset_index()
+        subject_df = st.session_state.data_df[subject_cols].mean().reset_index()
         subject_df.columns = ['Subject', 'Average Marks']
         st.bar_chart(subject_df.set_index('Subject'))
-        
-    except FileNotFoundError:
+    else:
         st.info("No data available yet. Please submit some papers first.")
-    except Exception as e:
-        st.error(f"Could not load data for reports: {e}")
 
 
 elif st.session_state.page == "Export Data":
@@ -469,16 +476,16 @@ elif st.session_state.page == "Export Data":
     st.write("Download your data in various formats (e.g., CSV, JSON).")
     st.write("---")
     
-    try:
-        with open("DATA.CSV", "r") as f:
-            csv_data = f.read()
-            st.download_button(
-                label="Download data as CSV",
-                data=csv_data,
-                file_name="data.csv",
-                mime="text/csv",
-            )
-    except FileNotFoundError:
+    if not st.session_state.data_df.empty:
+        # Convert DataFrame to CSV string for download
+        csv_data = st.session_state.data_df.to_csv(index=False)
+        st.download_button(
+            label="Download data as CSV",
+            data=csv_data,
+            file_name="data.csv",
+            mime="text/csv",
+        )
+    else:
         st.info("No data available to export.")
 
 
@@ -501,4 +508,3 @@ elif st.session_state.page == "Check flagged papers":
                     st.rerun()
     else:
         st.info("No papers have been flagged for review.")
-
