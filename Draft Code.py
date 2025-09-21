@@ -136,7 +136,7 @@ class OMRProcessor:
         corners.append(min(non_stray_centers, key=lambda p: (p[0] - min_x)**2 + (p[1] - min_y)**2))
         corners.append(min(non_stray_centers, key=lambda p: (p[0] - max_x)**2 + (p[1] - min_y)**2))
         corners.append(min(non_stray_centers, key=lambda p: (p[0] - min_x)**2 + (p[1] - max_y)**2))
-        corners.append(min(non_stray_centers, key=lambda p: (p[0] - max_x)**2 + (p[1] - max_y)**2)
+        corners.append(min(non_stray_centers, key=lambda p: (p[0] - max_x)**2 + (p[1] - max_y)**2))
         
         final_corners = [
             min(corners, key=lambda p: p[0] + p[1]),
@@ -466,3 +466,4 @@ elif st.session_state.page == "Check flagged papers":
                     st.rerun()
     else:
         st.info("No papers have been flagged for review.")
+
