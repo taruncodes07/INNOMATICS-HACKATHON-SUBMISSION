@@ -33,19 +33,19 @@ Installation and Usage
 To run this application, you need to have Python and the required libraries installed.
 
 Prerequisites
-Python 3.7+
+Python: Version 3.7 or higher.
 
-Streamlit
+Streamlit: For the web interface.
 
-OpenCV
+OpenCV: For image processing.
 
-NumPy
+NumPy: For numerical operations.
 
-pandas
+pandas: For data handling and analysis.
 
-scikit-learn
+scikit-learn: For clustering the bubble coordinates.
 
-imutils
+imutils: For image utilities.
 
 You can install the dependencies using pip:
 
