@@ -147,6 +147,9 @@ class OMRProcessor:
         unique_y = self.group_and_filter_coordinates(warped_y_coords, tolerance=5, min_group_size=1)
         
         filled_bubbles_labels = {}
+        # Define the starting numbers for each group of 4 columns
+        start_numbers = [1, 21, 41, 61, 81]
+        
         for row_idx, y_coord in enumerate(unique_y):
             for col_idx, x_coord in enumerate(unique_x):
                 warped_x = int(x_coord)
@@ -245,6 +248,8 @@ def save_data(data_row):
 
 if 'flagged_papers' not in st.session_state:
     st.session_state.flagged_papers = []
+if 'waitlist' not in st.session_state:
+    st.session_state.waitlist = []
 if 'page' not in st.session_state:
     st.session_state.page = "Enter data"
 if 'rotation_angle' not in st.session_state:
@@ -276,6 +281,96 @@ if st.sidebar.button("Export Data"):
 if st.sidebar.button("Check flagged papers"):
     st.session_state.page = "Check flagged papers"
     st.rerun()
+if st.sidebar.button("Check waitlist"):
+    st.session_state.page = "Check waitlist"
+    st.rerun()
+
+def process_and_grade_paper(student_name, exam_set_letter, uploaded_file):
+    try:
+        if uploaded_file is None:
+            st.warning("Please upload a file.")
+            return
+
+        img = Image.open(uploaded_file)
+        rotated_img = img.rotate(st.session_state.rotation_angle, expand=True)
+        scan = np.array(rotated_img)
+
+        omr_processor = OMRProcessor()
+        filled_bubbles_labels, flagged_papers_list = omr_processor.process_image(scan, uploaded_file.name)
+
+        if filled_bubbles_labels is None:
+            st.warning("This paper has been flagged for manual review.")
+            st.session_state.flagged_papers.append(uploaded_file.name)
+            return
+
+        if exam_set_letter.upper() not in st.session_state.answer_keys:
+            st.info("Answer key not found. Paper added to waitlist.")
+            st.session_state.waitlist.append({
+                'name': student_name,
+                'set': exam_set_letter.upper(),
+                'file': uploaded_file.name,
+                'image_data': uploaded_file.getvalue()
+            })
+        else:
+            st.success("Paper processed successfully!")
+            answer_key = st.session_state.answer_keys[exam_set_letter.upper()]
+            student_answers = {}
+            for q_num, options in filled_bubbles_labels.items():
+                if len(options) == 1:
+                    student_answers[q_num] = options[0].lower()
+                else:
+                    student_answers[q_num] = None
+
+            total_marks = 0
+            for q_num, correct_ans in answer_key.items():
+                student_ans = student_answers.get(q_num)
+                if student_ans is not None and student_ans == correct_ans:
+                    total_marks += 1
+            
+            subject_marks = {
+                "PYTHON": 0, "DATA ANALYSIS": 0, "MY SQL": 0,
+                "POWER BI": 0, "ADV STATS": 0
+            }
+            python_q = range(1, 21)
+            data_q = range(21, 41)
+            sql_q = range(41, 61)
+            bi_q = range(61, 81)
+            stats_q = range(81, 101)
+            
+            for q_num, student_ans in student_answers.items():
+                correct_ans = answer_key.get(q_num)
+                if student_ans is not None and student_ans == correct_ans:
+                    if q_num in python_q: subject_marks["PYTHON"] += 1
+                    elif q_num in data_q: subject_marks["DATA ANALYSIS"] += 1
+                    elif q_num in sql_q: subject_marks["MY SQL"] += 1
+                    elif q_num in bi_q: subject_marks["POWER BI"] += 1
+                    elif q_num in stats_q: subject_marks["ADV STATS"] += 1
+            
+            percentage = (total_marks / len(answer_key)) * 100
+            
+            data_dict = {
+                "Name": student_name,
+                "Paper Set": exam_set_letter.upper(),
+                "PYTHON": subject_marks["PYTHON"],
+                "DATA ANALYSIS": subject_marks["DATA ANALYSIS"],
+                "MY SQL": subject_marks["MY SQL"],
+                "POWER BI": subject_marks["POWER BI"],
+                "ADV STATS": subject_marks["ADV STATS"],
+                "TOTAL": total_marks,
+                "PERCENTAGE": f"{percentage:.2f}%"
+            }
+
+            st.session_state.data_df = pd.concat([st.session_state.data_df, pd.DataFrame([data_dict])], ignore_index=True)
+            
+            st.write("### Results")
+            st.write(f"**Total Marks:** {total_marks}/{len(answer_key)}")
+            st.write(f"**Percentage:** {percentage:.2f}%")
+            st.dataframe(pd.DataFrame([data_dict], columns=st.session_state.data_df.columns))
+            
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
+        st.warning("Paper flagged for manual review.")
+        st.session_state.flagged_papers.append(uploaded_file.name)
 
 if st.session_state.page == "Enter Answer Key":
     st.title("Enter Answer Key")
@@ -288,6 +383,16 @@ if st.session_state.page == "Enter Answer Key":
             if answer_key:
                 st.session_state.answer_keys[set_letter.upper()] = answer_key
                 st.success(f"Answer key for Set {set_letter.upper()} saved successfully!")
+                
+                # Check waitlist for this set and process papers
+                if any(item['set'] == set_letter.upper() for item in st.session_state.waitlist):
+                    st.info(f"Processing papers from waitlist for Set {set_letter.upper()}...")
+                    papers_to_process = [item for item in st.session_state.waitlist if item['set'] == set_letter.upper()]
+                    for paper in papers_to_process:
+                        uploaded_file = BytesIO(paper['image_data'])
+                        uploaded_file.name = paper['file']
+                        process_and_grade_paper(paper['name'], paper['set'], uploaded_file)
+                        st.session_state.waitlist.remove(paper)
         else:
             st.warning("Please provide both a set letter and an answer key file.")
 
@@ -315,84 +420,9 @@ elif st.session_state.page == "Enter data":
         img = Image.open(uploaded_file)
         rotated_img = img.rotate(st.session_state.rotation_angle, expand=True)
         st.image(rotated_img, caption='Uploaded Image')
-        scan = np.array(rotated_img)
-
-    if submit_button and uploaded_file:
-        try:
-            if exam_set_letter.upper() not in st.session_state.answer_keys:
-                st.error(f"Answer key for Set {exam_set_letter.upper()} not found. Please upload it first.")
-                st.warning("Paper flagged for manual review.")
-                st.session_state.flagged_papers.append(uploaded_file.name)
-                st.rerun()
-                
-            omr_processor = OMRProcessor()
-            filled_bubbles_labels, flagged_papers_list = omr_processor.process_image(scan, uploaded_file.name)
-            
-            if uploaded_file.name in flagged_papers_list:
-                st.warning("This paper has been flagged for manual review.")
-                st.session_state.flagged_papers.append(uploaded_file.name)
-            else:
-                st.success("Paper processed successfully!")
-                answer_key = st.session_state.answer_keys[exam_set_letter.upper()]
-                
-                student_answers = {}
-                for q_num, options in filled_bubbles_labels.items():
-                    if len(options) == 1:
-                        student_answers[q_num] = options[0].lower()
-                    else:
-                        student_answers[q_num] = None
-
-                total_marks = 0
-                for q_num, correct_ans in answer_key.items():
-                    student_ans = student_answers.get(q_num)
-                    if student_ans is not None and student_ans == correct_ans:
-                        total_marks += 1
-                
-                subject_marks = {
-                    "PYTHON": 0, "DATA ANALYSIS": 0, "MY SQL": 0,
-                    "POWER BI": 0, "ADV STATS": 0
-                }
-                
-                python_q = range(1, 21)
-                data_q = range(21, 41)
-                sql_q = range(41, 61)
-                bi_q = range(61, 81)
-                stats_q = range(81, 101)
-                
-                for q_num, student_ans in student_answers.items():
-                    correct_ans = answer_key.get(q_num)
-                    if student_ans is not None and student_ans == correct_ans:
-                        if q_num in python_q: subject_marks["PYTHON"] += 1
-                        elif q_num in data_q: subject_marks["DATA ANALYSIS"] += 1
-                        elif q_num in sql_q: subject_marks["MY SQL"] += 1
-                        elif q_num in bi_q: subject_marks["POWER BI"] += 1
-                        elif q_num in stats_q: subject_marks["ADV STATS"] += 1
-                
-                percentage = (total_marks / len(answer_key)) * 100
-                
-                data_dict = {
-                    "Name": student_name,
-                    "Paper Set": exam_set_letter.upper(),
-                    "PYTHON": subject_marks["PYTHON"],
-                    "DATA ANALYSIS": subject_marks["DATA ANALYSIS"],
-                    "MY SQL": subject_marks["MY SQL"],
-                    "POWER BI": subject_marks["POWER BI"],
-                    "ADV STATS": subject_marks["ADV STATS"],
-                    "TOTAL": total_marks,
-                    "PERCENTAGE": f"{percentage:.2f}%"
-                }
-
-                st.session_state.data_df = pd.concat([st.session_state.data_df, pd.DataFrame([data_dict])], ignore_index=True)
-                
-                st.write("### Results")
-                st.write(f"**Total Marks:** {total_marks}/{len(answer_key)}")
-                st.write(f"**Percentage:** {percentage:.2f}%")
-                st.dataframe(pd.DataFrame([data_dict], columns=st.session_state.data_df.columns))
-                
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-            st.warning("Paper flagged for manual review.")
-            st.session_state.flagged_papers.append(uploaded_file.name)
+        
+    if submit_button:
+        process_and_grade_paper(student_name, exam_set_letter, uploaded_file)
 
 elif st.session_state.page == "Reports":
     st.title("📈 Reports")
@@ -444,3 +474,15 @@ elif st.session_state.page == "Check flagged papers":
                     st.rerun()
     else:
         st.info("No papers have been flagged for review.")
+
+elif st.session_state.page == "Check waitlist":
+    st.title("⏳ Check Waitlist")
+    st.write("These papers are waiting for their answer key to be uploaded.")
+    st.write("---")
+    if st.session_state.waitlist:
+        waitlist_df = pd.DataFrame(st.session_state.waitlist).drop(columns=['image_data'])
+        st.dataframe(waitlist_df)
+        
+        st.warning("Once the answer key for a set is uploaded, all papers for that set will be automatically processed.")
+    else:
+        st.info("The waitlist is currently empty.")
